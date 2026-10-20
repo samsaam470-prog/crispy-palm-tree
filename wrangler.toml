@@ -1,0 +1,28 @@
+# Interview Research Platform — Cloudflare Worker configuration.
+# Replace the placeholder database_id AFTER you create your D1 database
+# (see docs/DEPLOYMENT.md). Never commit real secrets here; ADMIN_USER,
+# ADMIN_PASS and JWT_KEY are set with `wrangler secret put`.
+
+name = "interview-research-backend"
+main = "src/index.ts"
+compatibility_date = "2024-09-23"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "interview-research"
+# PLACEHOLDER ONLY — replace with the real database id printed by:
+#   npx wrangler d1 create interview-research
+database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+
+# Optional: enables durable global rate limiting on public endpoints.
+# Create a KV namespace and uncomment, or leave unset to use the
+# best-effort in-memory limiter (documented in README).
+# [[kv_namespaces]]
+# binding = "RATE_LIMIT_KV"
+# id = "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"
+
+[vars]
+# Non-secret configuration. Set these to your real values before deploying.
+PUBLIC_APP_URL = "https://your-frontend.example.com"
+ALLOWED_ORIGINS = "https://your-frontend.example.com"
+NODE_ENV = "production"

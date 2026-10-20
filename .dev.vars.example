@@ -1,0 +1,8 @@
+# Copy to .dev.vars for local development (never commit .dev.vars).
+# These are EXAMPLES of variable names only — use your own local values.
+ADMIN_USER=admin
+ADMIN_PASS=local-dev-password-min-8-chars
+JWT_KEY=local-dev-signing-key-change-me-000000
+PUBLIC_APP_URL=http://localhost:5173
+ALLOWED_ORIGINS=http://localhost:5173
+NODE_ENV=development
