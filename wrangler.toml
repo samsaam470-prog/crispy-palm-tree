@@ -1,0 +1,12 @@
+name = "crispy-palm-tree-backend"
+main = "src/index.ts"
+compatibility_date = "2024-10-22"
+
+[vars]
+ENVIRONMENT = "development"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "interview-research-db"
+database_id = "YOUR_DATABASE_ID_PLACEHOLDER"
+migrations_dir = "migrations"
