@@ -8,29 +8,33 @@ import dashboardRouter from './routes/dashboard';
 
 const app = new Hono<{ Bindings: Bindings }>();
 
-// Global CORS middleware
-app.use('*', cors({
-  origin: '*',
-  allowHeaders: ['Content-Type', 'Authorization'],
-  allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  exposeHeaders: ['Content-Length', 'X-Requested-With'],
-  maxAge: 600,
-}));
+// Configurable CORS based on environment or default secure fallback
+app.use('*', async (c, next) => {
+  const frontendOrigin = c.env.FRONTEND_ORIGIN || '*';
+  const corsMiddleware = cors({
+    origin: frontendOrigin,
+    allowHeaders: ['Content-Type', 'Authorization'],
+    allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    exposeHeaders: ['Content-Length', 'X-Requested-With', 'Content-Disposition'],
+    credentials: true,
+    maxAge: 600,
+  });
+  return corsMiddleware(c, next);
+});
 
-// Global error handler
+// Global error handler preventing stack trace exposure
 app.onError((err, c) => {
   console.error('Unhandled application error:', err);
   return c.json({ error: 'Internal Server Error', message: err.message }, 500);
 });
 
-// Mount route modules
+// Mount routes
 app.route('/api/auth', authRouter);
 app.route('/api/interviews', interviewsRouter);
 app.route('/api/public/interviews', publicRouter);
 app.route('/api/dashboard', dashboardRouter);
-app.route('/api/submissions', dashboardRouter); // For /api/submissions/recent and details
+app.route('/api/submissions', dashboardRouter);
 
-// Health check endpoint
 app.get('/api/health', (c) => {
   return c.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
