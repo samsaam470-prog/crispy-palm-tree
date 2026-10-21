@@ -1,16 +1,22 @@
 {
-  "name": "workspace",
-  "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "name": "interview-research-backend",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Single-administrator interview research platform backend (Cloudflare Workers + D1 + Hono).",
+  "type": "module",
+  "main": "src/index.ts",
   "directories": {
     "doc": "docs",
     "test": "tests"
   },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
-  "keywords": [],
+  "keywords": ["cloudflare", "workers", "d1", "hono", "interviews"],
   "author": "",
   "license": "ISC",
   "dependencies": {

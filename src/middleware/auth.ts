@@ -5,10 +5,10 @@
  */
 
 import { createMiddleware } from 'hono/factory';
-import type { Env } from '../../types';
-import { SESSION_COOKIE, assertConfig } from '../../config/env';
-import { readSession } from '../../services/auth';
-import { ApiError, forbidden, unauthorized } from '../../utils/errors';
+import type { Env } from '../types';
+import { SESSION_COOKIE, assertConfig } from '../config/env';
+import { readSession } from '../services/auth';
+import { ApiError, forbidden, unauthorized } from '../utils/errors';
 
 type Variables = { admin: { sub: string } };
 
@@ -60,7 +60,11 @@ export function installErrorHandler(app: any): void {
     return c.json({ error: { code: 'INTERNAL_ERROR', message: 'An unexpected error occurred.' } }, 500);
   });
 
-  app.notFound((c: any) =>
-    c.json({ error: { code: 'NOT_FOUND', message: 'Resource not found.' } }, 404),
-  );
+  app.notFound((c: any) => {
+    // Public interview routes keep a dedicated, non-enumerating message.
+    if (c.req.path.startsWith('/api/public/interviews/')) {
+      return c.json({ error: { code: 'NOT_FOUND', message: 'Interview not found.' } }, 404);
+    }
+    return c.json({ error: { code: 'NOT_FOUND', message: 'Resource not found.' } }, 404);
+  });
 }

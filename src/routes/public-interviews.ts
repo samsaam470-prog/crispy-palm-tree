@@ -48,9 +48,12 @@ function publicQuestionnaire(env: Env, detail: Awaited<ReturnType<typeof buildDe
   };
 }
 
+// Public tokens are ~22-char base56 strings; submissions add a `sub_` prefix.
+const PUBLIC_ID_RE = /^[A-Za-z0-9_-]{6,64}$/;
+
 publicRoutes.get('/interviews/:publicId', async (c) => {
   const publicId = c.req.param('publicId');
-  if (!/^[A-Za-z0-9]{8,64}$/.test(publicId)) throw notFound('Interview not found.');
+  if (!PUBLIC_ID_RE.test(publicId)) throw notFound('Interview not found.');
   const interview = await getInterviewByPublicId(c.env, publicId);
   if (!interview) throw notFound('Interview not found.'); // drafts & unknown ids -> 404
   const detail = await buildDetail(c.env, interview);
@@ -59,7 +62,7 @@ publicRoutes.get('/interviews/:publicId', async (c) => {
 
 publicRoutes.post('/interviews/:publicId/submissions', async (c) => {
   const publicId = c.req.param('publicId');
-  if (!/^[A-Za-z0-9]{8,64}$/.test(publicId)) throw notFound('Interview not found.');
+  if (!PUBLIC_ID_RE.test(publicId)) throw notFound('Interview not found.');
   await enforceRateLimit(c.env, c.req.raw, `submit:${publicId.slice(0, 12)}`);
   const len = Number(c.req.header('Content-Length') ?? '0');
   if (len > 256 * 1024) {

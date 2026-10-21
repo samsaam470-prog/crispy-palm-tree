@@ -16,12 +16,28 @@ export const MIGRATION_FILES = [
   '0003_submission_idempotency.sql',
 ];
 
+/**
+ * Strip comments safely, then split on semicolons. Inline `--` comments can
+ * contain semicolons, so they must be removed per-line BEFORE splitting —
+ * but only outside single-quoted string literals.
+ */
+export function stripComments(sql: string): string {
+  let out = '';
+  for (const line of sql.split('\n')) {
+    let inStr = false;
+    let cut = -1;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (ch === "'") inStr = !inStr;
+      else if (!inStr && ch === '-' && line[i + 1] === '-') { cut = i; break; }
+    }
+    out += (cut >= 0 ? line.slice(0, cut) : line) + '\n';
+  }
+  return out;
+}
+
 export function splitStatements(sql: string): string[] {
-  const noComments = sql
-    .split('\n')
-    .filter((line) => !line.trim().startsWith('--'))
-    .join('\n');
-  return noComments
+  return stripComments(sql)
     .split(';')
     .map((s) => s.trim())
     .filter((s) => s.length > 0);
