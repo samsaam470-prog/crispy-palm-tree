@@ -1,12 +1,15 @@
 {
   "name": "crispy-palm-tree-backend",
   "version": "1.0.0",
-  "description": "Backend for Private Interview Research Platform on Cloudflare Workers & D1",
+  "description": "Backend for the Interview Research Platform on Cloudflare Workers & D1",
   "main": "src/index.ts",
+  "type": "module",
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "test": "vitest run"
+    "build": "tsc --noEmit",
+    "test": "vitest run",
+    "check": "npm run build && npm test"
   },
   "dependencies": {
     "hono": "^4.6.3",

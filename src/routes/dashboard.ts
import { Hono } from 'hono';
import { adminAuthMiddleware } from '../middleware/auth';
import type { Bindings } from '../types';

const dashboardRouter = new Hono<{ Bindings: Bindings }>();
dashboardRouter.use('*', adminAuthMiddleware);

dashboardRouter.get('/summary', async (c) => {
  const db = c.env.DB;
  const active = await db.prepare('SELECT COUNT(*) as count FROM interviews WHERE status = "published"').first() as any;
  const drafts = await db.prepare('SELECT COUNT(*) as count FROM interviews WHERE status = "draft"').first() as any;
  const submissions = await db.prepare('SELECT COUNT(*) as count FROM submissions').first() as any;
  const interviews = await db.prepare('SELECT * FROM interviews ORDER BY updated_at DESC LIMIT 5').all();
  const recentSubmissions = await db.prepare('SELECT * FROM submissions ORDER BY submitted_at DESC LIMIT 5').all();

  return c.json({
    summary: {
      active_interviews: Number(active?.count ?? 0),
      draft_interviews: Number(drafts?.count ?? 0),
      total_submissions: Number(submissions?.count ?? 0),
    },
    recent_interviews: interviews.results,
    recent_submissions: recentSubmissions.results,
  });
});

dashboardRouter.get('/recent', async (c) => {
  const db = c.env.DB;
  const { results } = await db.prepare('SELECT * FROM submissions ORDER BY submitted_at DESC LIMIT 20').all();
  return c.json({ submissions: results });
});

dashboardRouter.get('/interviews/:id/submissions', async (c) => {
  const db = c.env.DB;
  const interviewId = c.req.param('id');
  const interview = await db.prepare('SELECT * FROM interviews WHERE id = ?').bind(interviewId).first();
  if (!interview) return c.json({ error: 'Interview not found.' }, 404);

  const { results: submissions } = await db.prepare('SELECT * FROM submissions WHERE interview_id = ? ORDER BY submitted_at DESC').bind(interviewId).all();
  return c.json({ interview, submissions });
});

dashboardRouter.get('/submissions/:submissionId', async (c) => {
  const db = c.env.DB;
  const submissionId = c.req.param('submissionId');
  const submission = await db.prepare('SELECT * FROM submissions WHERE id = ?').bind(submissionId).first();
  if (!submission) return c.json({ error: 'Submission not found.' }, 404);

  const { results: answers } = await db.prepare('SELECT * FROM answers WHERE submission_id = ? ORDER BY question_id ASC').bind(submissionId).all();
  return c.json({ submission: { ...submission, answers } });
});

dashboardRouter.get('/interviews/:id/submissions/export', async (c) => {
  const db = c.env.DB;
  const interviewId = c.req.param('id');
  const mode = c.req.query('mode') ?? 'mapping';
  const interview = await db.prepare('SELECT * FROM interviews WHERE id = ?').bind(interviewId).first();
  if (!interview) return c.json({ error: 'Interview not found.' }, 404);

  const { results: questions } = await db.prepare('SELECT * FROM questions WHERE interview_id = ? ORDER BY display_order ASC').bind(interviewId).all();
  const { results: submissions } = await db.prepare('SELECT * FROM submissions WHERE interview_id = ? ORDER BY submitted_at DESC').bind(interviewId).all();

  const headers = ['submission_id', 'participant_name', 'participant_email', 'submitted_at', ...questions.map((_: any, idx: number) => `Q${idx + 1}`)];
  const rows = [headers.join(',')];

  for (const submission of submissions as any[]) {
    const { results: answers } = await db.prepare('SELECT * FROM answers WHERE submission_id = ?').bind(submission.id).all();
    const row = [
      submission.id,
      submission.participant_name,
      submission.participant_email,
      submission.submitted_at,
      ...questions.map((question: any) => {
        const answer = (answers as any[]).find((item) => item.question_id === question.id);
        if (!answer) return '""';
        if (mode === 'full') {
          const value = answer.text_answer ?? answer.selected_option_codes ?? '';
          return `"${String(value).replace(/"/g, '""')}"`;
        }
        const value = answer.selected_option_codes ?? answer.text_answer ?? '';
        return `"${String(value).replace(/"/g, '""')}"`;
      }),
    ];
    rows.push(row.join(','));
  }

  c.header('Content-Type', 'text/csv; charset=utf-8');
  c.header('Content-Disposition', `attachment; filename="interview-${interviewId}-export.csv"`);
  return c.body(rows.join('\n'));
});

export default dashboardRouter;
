@@ -1,0 +1,163 @@
+import { Hono } from 'hono';
+import { z } from 'zod';
+import { generateSubmissionId } from '../utils/ids';
+import type { Bindings } from '../types';
+
+const publicRouter = new Hono<{ Bindings: Bindings }>();
+
+const answerSchema = z.object({
+  question_id: z.string().trim().min(1),
+  selected_option_ids: z.array(z.string()).optional().default([]),
+  selected_option_codes: z.array(z.string()).optional().default([]),
+  text_answer: z.string().optional().nullable(),
+  other_text: z.string().optional().nullable(),
+});
+
+const submissionSchema = z.object({
+  participant_name: z.string().trim().min(1),
+  participant_email: z.string().trim().email(),
+  answers: z.array(answerSchema).min(1),
+});
+
+function safeList(value: string[] | null | undefined): string[] {
+  if (!value) return [];
+  return value.filter(Boolean);
+}
+
+function escapeCsv(value: string): string {
+  const text = `${value ?? ''}`;
+  const sanitized = text.replace(/\r\n|\r|\n/g, ' ');
+  return `"${sanitized.replace(/"/g, '""')}"`;
+}
+
+publicRouter.get('/:publicId', async (c) => {
+  const publicId = c.req.param('publicId');
+  const interview = await c.env.DB.prepare('SELECT * FROM interviews WHERE public_id = ?').bind(publicId).first();
+  if (!interview) return c.json({ error: 'Interview not found.' }, 404);
+
+  if ((interview as any).status === 'draft') return c.json({ error: 'Interview is not published.' }, 403);
+  if ((interview as any).status === 'inactive') return c.json({ error: 'This interview is not accepting responses.', inactive: true }, 410);
+
+  const { results: questions } = await c.env.DB.prepare('SELECT * FROM questions WHERE interview_id = ? ORDER BY display_order ASC').bind((interview as any).id).all();
+  const payload = [] as any[];
+  for (const question of questions as any[]) {
+    const { results: options } = await c.env.DB.prepare('SELECT * FROM options WHERE question_id = ? ORDER BY display_order ASC').bind(question.id).all();
+    payload.push({ ...question, options });
+  }
+
+  return c.json({ interview: { ...interview, questions: payload } });
+});
+
+publicRouter.post('/:publicId/submissions', async (c) => {
+  const publicId = c.req.param('publicId');
+  const db = c.env.DB;
+  const interview = await db.prepare('SELECT * FROM interviews WHERE public_id = ?').bind(publicId).first();
+  if (!interview) return c.json({ error: 'Interview not found.' }, 404);
+  if ((interview as any).status !== 'published') return c.json({ error: 'This interview is not accepting responses.' }, 403);
+
+  const body = await c.req.json().catch(() => ({}));
+  const parsed = submissionSchema.safeParse(body);
+  if (!parsed.success) return c.json({ error: 'invalid_payload', details: parsed.error.format() }, 400);
+
+  const questionRows = await db.prepare('SELECT * FROM questions WHERE interview_id = ? ORDER BY display_order ASC').bind((interview as any).id).all();
+  const questionMap = new Map((questionRows.results as any[]).map((q) => [q.id, q]));
+  const optionRows = await db.prepare('SELECT * FROM options WHERE question_id IN (SELECT id FROM questions WHERE interview_id = ?) ORDER BY display_order ASC').bind((interview as any).id).all();
+  const optionMap = new Map((optionRows.results as any[]).map((o) => [o.id, o]));
+
+  for (const question of questionRows.results as any[]) {
+    const answer = parsed.data.answers.find((item) => item.question_id === question.id);
+    if (question.is_required && (!answer || ((safeList(answer.selected_option_ids).length === 0 && safeList(answer.selected_option_codes).length === 0 && !answer.text_answer) && !answer.other_text))) {
+      return c.json({ error: `Required question ${question.id} was not answered.` }, 400);
+    }
+
+    if (answer) {
+      const builtIds = safeList(answer.selected_option_ids);
+      const builtCodes = safeList(answer.selected_option_codes);
+      if (question.question_type === 'single_choice' && builtIds.length + builtCodes.length > 1) {
+        return c.json({ error: `Question ${question.id} only allows a single choice.` }, 400);
+      }
+      if (question.question_type === 'dropdown' && builtIds.length + builtCodes.length > 1) {
+        return c.json({ error: `Question ${question.id} only allows a single choice.` }, 400);
+      }
+      if (question.question_type === 'multiple_choice' || question.question_type === 'multiple_choice_other') {
+        if (answer.text_answer && question.question_type !== 'multiple_choice_other') {
+          return c.json({ error: `Question ${question.id} does not accept text answers.` }, 400);
+        }
+      }
+
+      for (const optionId of builtIds) {
+        const option = optionMap.get(optionId);
+        if (!option || option.question_id !== question.id) {
+          return c.json({ error: `Option ${optionId} does not belong to question ${question.id}.` }, 400);
+        }
+      }
+
+      for (const optionCode of builtCodes) {
+        const match = (optionRows.results as any[]).find((option) => option.question_id === question.id && option.code === optionCode);
+        if (!match) {
+          return c.json({ error: `Code ${optionCode} does not belong to question ${question.id}.` }, 400);
+        }
+      }
+    }
+  }
+
+  for (const answer of parsed.data.answers) {
+    if (!questionMap.has(answer.question_id)) {
+      return c.json({ error: `Question ${answer.question_id} does not exist for this interview.` }, 400);
+    }
+  }
+
+  const submissionId = generateSubmissionId();
+  const now = new Date().toISOString();
+  await db.prepare(
+    `INSERT INTO submissions (id, interview_id, participant_name, participant_email, branch_path, submitted_at)
+     VALUES (?, ?, ?, ?, '[]', ?)`
+  ).bind(submissionId, (interview as any).id, parsed.data.participant_name, parsed.data.participant_email, now).run();
+
+  for (const answer of parsed.data.answers) {
+    const id = generateSubmissionId();
+    const selectedOptionIds = JSON.stringify(safeList(answer.selected_option_ids));
+    const selectedOptionCodes = JSON.stringify(safeList(answer.selected_option_codes));
+    const textAnswer = answer.text_answer && answer.text_answer.trim() ? answer.text_answer.trim() : null;
+    const otherText = answer.other_text && answer.other_text.trim() ? answer.other_text.trim() : null;
+
+    await db.prepare(
+      `INSERT INTO answers (id, submission_id, question_id, selected_option_ids, selected_option_codes, text_answer, other_text)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    ).bind(id, submissionId, answer.question_id, selectedOptionIds, selectedOptionCodes, textAnswer, otherText).run();
+  }
+
+  return c.json({ success: true, submission_id: submissionId, status: 'accepted' }, 201);
+});
+
+publicRouter.get('/:publicId/export.csv', async (c) => {
+  const publicId = c.req.param('publicId');
+  const interview = await c.env.DB.prepare('SELECT * FROM interviews WHERE public_id = ?').bind(publicId).first();
+  if (!interview) return c.json({ error: 'Interview not found.' }, 404);
+  const { results: questions } = await c.env.DB.prepare('SELECT * FROM questions WHERE interview_id = ? ORDER BY display_order ASC').bind((interview as any).id).all();
+  const { results: submissions } = await c.env.DB.prepare('SELECT * FROM submissions WHERE interview_id = ? ORDER BY submitted_at DESC').bind((interview as any).id).all();
+
+  const headers = ['submission_id', 'participant_name', 'participant_email', 'submitted_at', ...questions.map((_: any, index: number) => `Q${index + 1}`)];
+  const rows = [headers.join(',')];
+
+  for (const submission of submissions as any[]) {
+    const { results: answers } = await c.env.DB.prepare('SELECT * FROM answers WHERE submission_id = ?').bind(submission.id).all();
+    const row = [
+      submission.id,
+      submission.participant_name,
+      submission.participant_email,
+      submission.submitted_at,
+      ...questions.map((question: any) => {
+        const answer = (answers as any[]).find((item) => item.question_id === question.id);
+        const answerValue = answer ? (answer.text_answer ?? answer.selected_option_codes ?? '') : '';
+        return escapeCsv(String(answerValue));
+      }),
+    ];
+    rows.push(row.join(','));
+  }
+
+  c.header('Content-Type', 'text/csv; charset=utf-8');
+  return c.body(rows.join('\n'));
+});
+
+export default publicRouter;
