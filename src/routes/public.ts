@@ -33,7 +33,7 @@ publicRouter.get('/:publicId', async (c) => {
   const fullQuestions = [];
   for (const q of questions as any[]) {
     const { results: options } = await db.prepare(
-      `SELECT id, label, code, display_order FROM question_options WHERE question_id = ? ORDER BY display_order ASC`
+      `SELECT id, label, code, display_order FROM options WHERE question_id = ? ORDER BY display_order ASC`
     ).bind(q.id).all();
     fullQuestions.push({ ...q, options });
   }
@@ -82,14 +82,12 @@ publicRouter.post('/:publicId/submissions', async (c) => {
 
     const { participant_name, participant_email, answers } = parsed.data;
 
-    // Fetch all valid questions and options for this interview version
     const { results: questions } = await db.prepare(
       `SELECT id, is_required, question_type FROM questions WHERE interview_id = ?`
     ).bind(interview.id).all();
 
     const questionMap = new Map(questions.map((q: any) => [q.id, q]));
 
-    // Validate required questions and options
     for (const q of questions as any[]) {
       const userAns = answers.find(a => a.question_id === q.id);
       if (q.is_required) {
@@ -102,9 +100,13 @@ publicRouter.post('/:publicId/submissions', async (c) => {
     const submissionId = generateId('sub');
     const now = new Date().toISOString();
 
-    await db.prepare(
-      `INSERT INTO submissions (id, interview_id, participant_name, participant_email, submitted_at) VALUES (?, ?, ?, ?, ?)`
-    ).bind(submissionId, interview.id, participant_name, participant_email, now).run();
+    const statements = [];
+
+    statements.push(
+      db.prepare(
+        `INSERT INTO submissions (id, interview_id, participant_name, participant_email, submitted_at) VALUES (?, ?, ?, ?, ?)`
+      ).bind(submissionId, interview.id, participant_name, participant_email, now)
+    );
 
     for (const ans of answers) {
       if (!questionMap.has(ans.question_id)) {
@@ -112,19 +114,25 @@ publicRouter.post('/:publicId/submissions', async (c) => {
       }
 
       const answerId = generateId('ans');
-      const selectedOptionsJson = JSON.stringify(ans.selected_option_ids || []);
+      const selectedIdsJson = JSON.stringify(ans.selected_option_ids || []);
+      const selectedCodesJson = JSON.stringify([]);
 
-      await db.prepare(
-        `INSERT INTO answers (id, submission_id, question_id, selected_options_json, text_answer, other_text) VALUES (?, ?, ?, ?, ?, ?)`
-      ).bind(
-        answerId,
-        submissionId,
-        ans.question_id,
-        selectedOptionsJson,
-        ans.text_answer || null,
-        ans.other_text || null
-      ).run();
+      statements.push(
+        db.prepare(
+          `INSERT INTO answers (id, submission_id, question_id, selected_option_ids, selected_option_codes, text_answer, other_text) VALUES (?, ?, ?, ?, ?, ?, ?)`
+        ).bind(
+          answerId,
+          submissionId,
+          ans.question_id,
+          selectedIdsJson,
+          selectedCodesJson,
+          ans.text_answer || null,
+          ans.other_text || null
+        )
+      );
     }
+
+    await db.batch(statements);
 
     return c.json({ success: true, submissionId, message: 'Submission recorded successfully' }, 201);
   } catch (err: any) {
