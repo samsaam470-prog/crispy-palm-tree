@@ -5,7 +5,6 @@ import type { Bindings } from '../types';
 
 const publicRouter = new Hono<{ Bindings: Bindings }>();
 
-// GET /api/public/interviews/:publicId - Retrieve published questionnaire
 publicRouter.get('/:publicId', async (c) => {
   const db = c.env.DB;
   const publicId = c.req.param('publicId');
@@ -52,7 +51,6 @@ const submissionPayloadSchema = z.object({
   })).min(1),
 });
 
-// POST /api/public/interviews/:publicId/submissions - Submit response
 publicRouter.post('/:publicId/submissions', async (c) => {
   const db = c.env.DB;
   const publicId = c.req.param('publicId');
