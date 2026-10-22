@@ -19,9 +19,9 @@ dashboardRouter.get('/summary', async (c) => {
   ).all();
 
   const { results: recentSubmissions } = await db.prepare(
-    `SELECT s.id, s.participant_name, s.participant_email, s.submitted_at, i.title as interview_title, i.version 
-     FROM submissions s 
-     JOIN interviews i ON s.interview_id = i.id 
+    `SELECT s.id, s.participant_name, s.participant_email, s.submitted_at, i.title as interview_title, i.version
+     FROM submissions s
+     JOIN interviews i ON s.interview_id = i.id
      ORDER BY s.submitted_at DESC LIMIT 5`
   ).all();
 
@@ -31,12 +31,12 @@ dashboardRouter.get('/summary', async (c) => {
       draft_interviews: draftCountRes?.count || 0,
       total_submissions: submissionCountRes?.count || 0,
     },
-    recent_interviews,
-    recent_submissions,
+    recentInterviews,
+    recentSubmissions,
   });
 });
 
-// GET /api/submissions/recent or /api/submissions/:submissionId
+// GET /api/submissions/recent
 dashboardRouter.get('/recent', async (c) => {
   const db = c.env.DB;
   const { results } = await db.prepare(
@@ -62,15 +62,23 @@ dashboardRouter.get('/interviews/:id/submissions', async (c) => {
     `SELECT * FROM submissions WHERE interview_id = ? ORDER BY submitted_at DESC`
   ).bind(interviewId).all();
 
+  const { results: questions } = await db.prepare(
+    `SELECT id, question_text, display_order FROM questions WHERE interview_id = ? ORDER BY display_order ASC`
+  ).bind(interviewId).all();
+
   const detailedSubmissions = [];
   for (const sub of submissions as any[]) {
     const { results: answers } = await db.prepare(
-      `SELECT a.*, q.question_text, q.answer_display_preference FROM answers a JOIN questions q ON a.question_id = q.id WHERE a.submission_id = ?`
+      `SELECT a.*, q.question_text, q.question_type, q.answer_display_preference
+       FROM answers a
+       JOIN questions q ON a.question_id = q.id
+       WHERE a.submission_id = ?
+       ORDER BY q.display_order ASC`
     ).bind(sub.id).all();
     detailedSubmissions.push({ ...sub, answers });
   }
 
-  return c.json({ interview, submissions: detailedSubmissions });
+  return c.json({ interview, questions, submissions: detailedSubmissions });
 });
 
 // GET /api/submissions/:submissionId - Individual submission details
@@ -85,13 +93,16 @@ dashboardRouter.get('/:submissionId', async (c) => {
 
   const interview = await db.prepare(`SELECT * FROM interviews WHERE id = ?`).bind(submission.interview_id).first();
   const { results: answers } = await db.prepare(
-    `SELECT a.*, q.question_text, q.question_type FROM answers a JOIN questions q ON a.question_id = q.id WHERE a.submission_id = ?`
+    `SELECT a.*, q.question_text, q.question_type, q.answer_display_preference
+     FROM answers a
+     JOIN questions q ON a.question_id = q.id
+     WHERE a.submission_id = ?`
   ).bind(submissionId).all();
 
   return c.json({ submission: { ...submission, interview, answers } });
 });
 
-// GET /api/interviews/:id/submissions/export - CSV Export with mapping or full answer modes
+// GET /api/interviews/:id/submissions/export - CSV Export
 dashboardRouter.get('/interviews/:id/submissions/export', async (c) => {
   const db = c.env.DB;
   const interviewId = c.req.param('id');
@@ -106,6 +117,21 @@ dashboardRouter.get('/interviews/:id/submissions/export', async (c) => {
     `SELECT id, display_order FROM questions WHERE interview_id = ? ORDER BY display_order ASC`
   ).bind(interviewId).all();
 
+  // Fetch all options for this interview version for label reconstruction
+  const { results: allOptions } = await db.prepare(
+    `SELECT o.id, o.label, o.code, o.question_id
+     FROM options o
+     JOIN questions q ON o.question_id = q.id
+     WHERE q.interview_id = ?`
+  ).bind(interviewId).all();
+
+  const optionLabelMap = new Map<string, string>();
+  const optionCodeMap = new Map<string, string>();
+  for (const opt of allOptions as any[]) {
+    optionLabelMap.set(opt.id, opt.label);
+    optionCodeMap.set(opt.id, opt.code);
+  }
+
   const { results: submissions } = await db.prepare(
     `SELECT * FROM submissions WHERE interview_id = ? ORDER BY submitted_at ASC`
   ).bind(interviewId).all();
@@ -114,7 +140,14 @@ dashboardRouter.get('/interviews/:id/submissions/export', async (c) => {
   const qHeaders = questions.map((_, idx) => `Q${idx + 1}`);
   const headers = ['Submission ID', 'Participant Name', 'Participant Email', 'Submitted At', ...qHeaders];
 
-  const rows = [headers.join(',')];
+  const escapeCell = (val: string): string => {
+    if (/^[=+\-@\t\r]/.test(val)) {
+      val = `'${val}`;
+    }
+    return `"${val.replace(/"/g, '""')}"`;
+  };
+
+  const rows = [headers.map(escapeCell).join(',')];
 
   for (const sub of submissions as any[]) {
     const { results: answers } = await db.prepare(
@@ -126,20 +159,20 @@ dashboardRouter.get('/interviews/:id/submissions/export', async (c) => {
       ansMap.set(ans.question_id, ans);
     }
 
-    const qCols = [];
+    const qCols: string[] = [];
     for (const q of questions as any[]) {
       const ans = ansMap.get(q.id);
       let val = '';
       if (ans) {
         if (ans.text_answer) {
           val = ans.text_answer;
-        } else if (ans.selected_options_json) {
+        } else if (ans.selected_option_ids) {
           try {
-            const opts = JSON.parse(ans.selected_options_json);
+            const ids = JSON.parse(ans.selected_option_ids);
             if (mode === 'mapping') {
-              val = opts.join(':');
+              val = ids.map((id: string) => optionCodeMap.get(id) || id).join(',');
             } else {
-              val = opts.join(', ');
+              val = ids.map((id: string) => optionLabelMap.get(id) || id).join('; ');
             }
           } catch {
             val = '';
@@ -149,19 +182,14 @@ dashboardRouter.get('/interviews/:id/submissions/export', async (c) => {
           val += ` (Other: ${ans.other_text})`;
         }
       }
-
-      // Formula injection mitigation for CSV
-      if (/^[=+\-@\t\r]/.test(val)) {
-        val = `'${val}`;
-      }
-      qCols.push(`"${val.replace(/"/g, '""')}"`);
+      qCols.push(escapeCell(val));
     }
 
     const rowData = [
-      `"${sub.id}"`,
-      `"${sub.participant_name.replace(/"/g, '""')}"`,
-      `"${sub.participant_email.replace(/"/g, '""')}"`,
-      `"${sub.submitted_at}"`,
+      escapeCell(sub.id),
+      escapeCell(sub.participant_name),
+      escapeCell(sub.participant_email),
+      escapeCell(sub.submitted_at),
       ...qCols,
     ];
     rows.push(rowData.join(','));
